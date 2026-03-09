@@ -24,7 +24,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'prospectos' | 'pagos'>('prospectos')
   const [selectedProspecto, setSelectedProspecto] = useState<Prospecto | null>(null)
 
-  const { prospectos, conversaciones, pagos, loading, updatePagoEstatus, getConversacionesByTelefono, refetch } =
+  const { prospectos, pagos, loading, updatePagoEstatus, getConversacionesByTelefono, refetch } =
     useData(filtros)
 
   return (
