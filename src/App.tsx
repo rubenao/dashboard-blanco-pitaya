@@ -17,7 +17,7 @@ const TABS = [
 
 export default function App() {
   const [filtros, setFiltros] = useState<Filtros>({
-    dateRange: 'mes',
+    dateRange: 'todos',
     nivelInteres: 'Todos',
     productoInteres: 'Todos',
   })

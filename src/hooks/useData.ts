@@ -2,17 +2,50 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import { mockProspectos, mockConversaciones, mockPagos } from '../data/mockData'
 import type { Prospecto, Conversacion, Pago, Filtros } from '../types'
-import { startOfDay, subDays, startOfMonth } from 'date-fns'
+import { startOfDay, subDays, startOfMonth, endOfDay, parseISO } from 'date-fns'
 import { toZonedTime } from 'date-fns-tz'
 
 const TZ = 'America/Mexico_City'
 
-function getDateRangeStart(range: Filtros['dateRange']): Date {
+function getDateRange(filtros: Filtros): { start: Date | null; end: Date } {
   const nowMex = toZonedTime(new Date(), TZ)
-  if (range === 'hoy') return startOfDay(nowMex)
-  if (range === '7dias') return startOfDay(subDays(nowMex, 6))
-  if (range === 'mes') return startOfMonth(nowMex)
-  return startOfDay(nowMex)
+
+  if (filtros.dateRange === 'todos') {
+    return { start: null, end: endOfDay(nowMex) }
+  }
+  if (filtros.dateRange === 'personalizado' && filtros.fechaInicio && filtros.fechaFin) {
+    return {
+      start: startOfDay(parseISO(filtros.fechaInicio)),
+      end: endOfDay(parseISO(filtros.fechaFin)),
+    }
+  }
+  if (filtros.dateRange === 'hoy') {
+    return { start: startOfDay(nowMex), end: endOfDay(nowMex) }
+  }
+  if (filtros.dateRange === '7dias') {
+    return { start: startOfDay(subDays(nowMex, 6)), end: endOfDay(nowMex) }
+  }
+  // mes
+  return { start: startOfMonth(nowMex), end: endOfDay(nowMex) }
+}
+
+/** Obtiene TODOS los registros de una tabla usando paginación de 1000 en 1000 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const PAGE_SIZE = 1000
+  let allRows: T[] = []
+  let from = 0
+
+  while (true) {
+    const { data, error } = await buildQuery().range(from, from + PAGE_SIZE - 1)
+    if (error) throw error
+    if (!data || data.length === 0) break
+    allRows = allRows.concat(data as T[])
+    if (data.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+
+  return allRows
 }
 
 export function useData(filtros: Filtros) {
@@ -26,45 +59,72 @@ export function useData(filtros: Filtros) {
     try {
       if (isSupabaseConfigured) {
         // ── SUPABASE REAL ──────────────────────────────────────
-        const rangeStart = getDateRangeStart(filtros.dateRange).toISOString()
+        const { start, end } = getDateRange(filtros)
+        const rangeStart = start ? start.toISOString() : null
+        const rangeEnd = end.toISOString()
 
-        let qProspectos = supabase
-          .from('prospectos')
-          .select('*')
-          .gte('ultima_interaccion', rangeStart)
+        const sinFiltroFecha = filtros.dateRange === 'todos'
 
-        if (filtros.nivelInteres !== 'Todos') {
-          qProspectos = qProspectos.eq('nivel_interes', filtros.nivelInteres)
-        }
-
-        const [{ data: pData }, { data: cData }, { data: pgData }] = await Promise.all([
-          qProspectos,
-          supabase
-            .from('conversaciones')
+        // Prospectos — paginación completa
+        const pData = await fetchAllRows<Prospecto>(() => {
+          let q = supabase
+            .from('prospectos')
             .select('*')
-            .gte('created_at', rangeStart)
-            .order('created_at', { ascending: true }),
-          supabase.from('pagos').select('*').gte('fecha_creacion', rangeStart),
+            .order('ultima_interaccion', { ascending: false })
+
+          if (!sinFiltroFecha) {
+            if (rangeStart) q = q.gte('ultima_interaccion', rangeStart)
+            q = q.lte('ultima_interaccion', rangeEnd)
+          }
+
+          if (filtros.nivelInteres !== 'Todos') {
+            q = q.eq('nivel_interes', filtros.nivelInteres)
+          }
+          return q
+        })
+
+        // Conversaciones y pagos — paginación completa
+        const [cData, pgData] = await Promise.all([
+          fetchAllRows<Conversacion>(() => {
+            let q = supabase
+              .from('conversaciones')
+              .select('*')
+              .order('created_at', { ascending: true })
+            if (!sinFiltroFecha) {
+              if (rangeStart) q = q.gte('created_at', rangeStart)
+              q = q.lte('created_at', rangeEnd)
+            }
+            return q
+          }),
+          fetchAllRows<Pago>(() => {
+            let q = supabase.from('pagos').select('*')
+            if (!sinFiltroFecha) {
+              if (rangeStart) q = q.gte('fecha_creacion', rangeStart)
+              q = q.lte('fecha_creacion', rangeEnd)
+            }
+            return q
+          }),
         ])
 
-        let prospectosFiltrados = pData || []
+        let prospectosFiltrados = pData
         if (filtros.productoInteres !== 'Todos') {
-          prospectosFiltrados = prospectosFiltrados.filter((p: Prospecto) =>
-            Array.isArray(p.productos_interes) &&
-            p.productos_interes.includes(filtros.productoInteres as 'Campamento' | 'Taller')
+          prospectosFiltrados = prospectosFiltrados.filter(
+            (p) =>
+              Array.isArray(p.productos_interes) &&
+              p.productos_interes.includes(filtros.productoInteres as 'Campamento' | 'Taller')
           )
         }
 
         setProspectos(prospectosFiltrados)
-        setConversaciones(cData || [])
-        setPagos(pgData || [])
+        setConversaciones(cData)
+        setPagos(pgData)
       } else {
         // ── DATOS MOCKEADOS ────────────────────────────────────
-        const rangeStart = getDateRangeStart(filtros.dateRange)
+        const { start } = getDateRange(filtros)
 
-        let filteredProspectos = mockProspectos.filter(
-          (p) => new Date(p.ultima_interaccion) >= rangeStart
-        )
+        let filteredProspectos = start
+          ? mockProspectos.filter((p) => new Date(p.ultima_interaccion) >= start)
+          : [...mockProspectos]
         if (filtros.nivelInteres !== 'Todos') {
           filteredProspectos = filteredProspectos.filter(
             (p) => p.nivel_interes === filtros.nivelInteres
@@ -76,12 +136,12 @@ export function useData(filtros: Filtros) {
           )
         }
 
-        const filteredConversaciones = mockConversaciones.filter(
-          (c) => new Date(c.created_at) >= rangeStart
-        )
-        const filteredPagos = mockPagos.filter(
-          (p) => new Date(p.fecha_creacion) >= rangeStart
-        )
+        const filteredConversaciones = start
+          ? mockConversaciones.filter((c) => new Date(c.created_at) >= start)
+          : [...mockConversaciones]
+        const filteredPagos = start
+          ? mockPagos.filter((p) => new Date(p.fecha_creacion) >= start)
+          : [...mockPagos]
 
         setProspectos(filteredProspectos)
         setConversaciones(filteredConversaciones)

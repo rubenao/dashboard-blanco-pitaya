@@ -54,10 +54,12 @@ export interface Pago {
   fecha_creacion: string
 }
 
-export type DateRange = 'hoy' | '7dias' | 'mes'
+export type DateRange = 'todos' | 'hoy' | '7dias' | 'mes' | 'personalizado'
 
 export interface Filtros {
   dateRange: DateRange
+  fechaInicio?: string  // ISO date string YYYY-MM-DD, solo cuando dateRange === 'personalizado'
+  fechaFin?: string     // ISO date string YYYY-MM-DD, solo cuando dateRange === 'personalizado'
   nivelInteres: NivelInteres | 'Todos'
   productoInteres: ProductoInteres | 'Todos'
 }
