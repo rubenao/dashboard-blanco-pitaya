@@ -31,7 +31,7 @@ function getDateRange(filtros: Filtros): { start: Date | null; end: Date } {
 
 /** Obtiene TODOS los registros de una tabla usando paginación de 1000 en 1000 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+async function fetchAllRows<T extends { id: string | number }>(buildQuery: () => any): Promise<T[]> {
   const PAGE_SIZE = 1000
   let allRows: T[] = []
   let from = 0
@@ -45,7 +45,13 @@ async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
     from += PAGE_SIZE
   }
 
-  return allRows
+  // Deduplicar por id para evitar duplicados por paginación no determinística
+  const seen = new Set<string | number>()
+  return allRows.filter((row) => {
+    if (seen.has(row.id)) return false
+    seen.add(row.id)
+    return true
+  })
 }
 
 export function useData(filtros: Filtros) {
@@ -71,6 +77,7 @@ export function useData(filtros: Filtros) {
             .from('prospectos')
             .select('*')
             .order('ultima_interaccion', { ascending: false })
+            .order('id', { ascending: true })
 
           if (!sinFiltroFecha) {
             if (rangeStart) q = q.gte('ultima_interaccion', rangeStart)
@@ -90,6 +97,7 @@ export function useData(filtros: Filtros) {
               .from('conversaciones')
               .select('*')
               .order('created_at', { ascending: true })
+              .order('id', { ascending: true })
             if (!sinFiltroFecha) {
               if (rangeStart) q = q.gte('created_at', rangeStart)
               q = q.lte('created_at', rangeEnd)
@@ -107,6 +115,11 @@ export function useData(filtros: Filtros) {
         ])
 
         let prospectosFiltrados = pData
+        if (filtros.nivelInteres !== 'Todos') {
+          prospectosFiltrados = prospectosFiltrados.filter(
+            (p) => p.nivel_interes === filtros.nivelInteres
+          )
+        }
         if (filtros.productoInteres !== 'Todos') {
           prospectosFiltrados = prospectosFiltrados.filter(
             (p) =>
